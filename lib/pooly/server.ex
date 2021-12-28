@@ -33,6 +33,13 @@ defmodule Pooly.Server do
 
   def init([sup, pool_config]) when is_pid(sup) do
     IO.puts("Pooly.Server <#{inspect self()}> init with supervisor <#{inspect sup}>")
+    # If the server crashes, should it bring down the worker process?
+    # It should, because otherwise, the state of the server will be inconsistent with the pool’s actual state.
+    # On the other hand, when a worker process crashes, should it bring down the server process?
+    # Of course not! What does this mean for you? Well, because of the bidirectional dependency, you should use links.
+    # But because the server should not crash when a worker process crashes, the server process should trap exits,
+    # as shown in the following listing.
+    Process.flag(:trap_exit, true)
     monitors = :ets.new(:monitors, [:private])
     init(pool_config, %State{sup: sup, monitors: monitors})
   end
@@ -63,6 +70,32 @@ defmodule Pooly.Server do
     IO.puts("Pooly Server <#{inspect self()}> started worker_supervisor <#{inspect worker_sup}>")
     IO.puts("Pooly Server <#{inspect self()}> state is now <#{inspect state}>")
     {:noreply, %{state | worker_sup: worker_sup, workers: workers}}
+  end
+
+  # consumer down.. remove monitor and checkin worker
+  def handle_info({:DOWN, ref, _, _, _}, state = %{workers: workers, monitors: monitors}) do
+    case :ets.match(monitors, {:"$1", ref}) do
+      [[pid]] ->
+        true = :ets.delete(monitors, pid)
+        new_state = %{state | workers: [pid | workers]}
+        {:npreply, new_state}
+      [[]] ->
+        {:noreply, state}
+    end
+  end
+
+  # trapping exits: exit message from workers
+  def handle_info({:EXIT, pid, _reason}, state = %{workers: workers, monitors: monitors, worker_sup: worker_sup}) do
+    case :ets.lookup(monitors, pid) do
+      [{pid, ref}] ->
+        # stop monitoring consumer process
+        true = Process.demonitor(ref)
+        true = :ets.delete(monitors, pid)
+        new_state = %{state | workers: [new_worker(worker_sup) | workers]}
+        {:npreply, new_state}
+      [[]] ->
+        {:noreply, state}
+    end
   end
 
   def handle_call(:checkout, {from_pid, _ref}, %{workers: workers, monitors: monitors} = state) do

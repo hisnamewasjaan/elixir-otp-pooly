@@ -10,6 +10,7 @@ defmodule Pooly.WorkerSupervisor do
   #############
 
   def init({mod, fun, args}) do
+    IO.puts("Pooly.WorkerSupervisor init")
     worker_opts = [
       restart: :permanent,
       function: fun
@@ -22,6 +23,8 @@ defmodule Pooly.WorkerSupervisor do
       max_restarts: 5,
       max_seconds: 5
     ]
+
+    IO.puts("Pooly.WorkerSupervisor calling supervise with children <#{inspect children}>")
 
     # create supervisor specification
     Supervisor.Spec.supervise(children, opts)
